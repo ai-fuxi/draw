@@ -1,0 +1,62 @@
+# ============================================================
+# 自动部署：main 分支 push 后自动同步到生产服务器
+# 目标: https://ai-fuxi.com/draw/
+# 服务器: 62.234.141.185  nginx 站点根: /var/www/html/draw/
+# 方式: SSH + rsync（部署私钥存于 GitHub secret: DEPLOY_KEY）
+# 只同步站点运行文件，不含说明/脚本等敏感文件
+# ============================================================
+name: Deploy to Server
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-draw
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 构建发布目录：只挑站点运行文件，排除敏感文件
+      - name: Prepare publish directory
+        run: |
+          mkdir -p _site
+          cp -r index.html css js _site/
+          # 安全校验：发布目录绝不允许出现敏感文件
+          #   *.md   = 说明文档
+          #   *.sql  = 数据库脚本
+          #   *.sh   = 部署脚本
+          #   preview = 截图等非站点文件
+          if find _site -type f \( -name "*.md" -o -name "*.sql" -o -name "*.sh" \) | grep -q .; then
+            echo "❌ 检测到敏感文件混入发布目录，终止部署"
+            find _site -type f
+            exit 1
+          fi
+          echo "发布文件:"
+          ls -laR _site/
+
+      - name: Deploy via rsync over SSH
+        run: |
+          set -e
+          # 写入部署私钥（GitHub secret 注入）
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # 首次连接跳过 host key 校验
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o BatchMode=yes \
+              ubuntu@62.234.141.185 'echo CONN_OK && sudo -n true'
+          # 先确保目标目录属主为 ubuntu
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ubuntu@62.234.141.185 \
+            'sudo mkdir -p /var/www/html/draw && sudo chown -R ubuntu:ubuntu /var/www/html/draw && sudo chmod -R u+rwX /var/www/html/draw'
+          # 源目录（runner）→ 服务器目标
+          rsync -avz --delete -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
+            _site/ ubuntu@62.234.141.185:/var/www/html/draw/
+          # 修正属主 + 校验
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ubuntu@62.234.141.185 \
+            'sudo chown -R ubuntu:ubuntu /var/www/html/draw && ls -la /var/www/html/draw/'
