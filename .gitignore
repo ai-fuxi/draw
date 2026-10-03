@@ -6,4 +6,4 @@ preview/
 
 # 部署凭据（含真实密码/token，永不提交）
 .deploy.env
-.deploy.env.*
+.deploy.env.*_ignored_none/
